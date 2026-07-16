@@ -1,0 +1,692 @@
+---
+title: "Final Project"
+author: "Caitlin Buckle"
+date: "2026-07-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load required packages 
+```{r message=FALSE, warning=FALSE}
+library(readr)
+library(tidyverse)
+library(dplyr)
+library(splines)
+```
+
+Data downloaded from Taronga Conservation Society, Public Access Australian Shark Incident Database (ASID)
+Accessed and downloaded, July 16th 2026 
+
+Read ASID.csv into R
+```{r}
+asid<-read.csv("Data/ASID.csv")
+summary(asid)
+```
+
+### Cleaning 
+
+```{r}
+asid%>% 
+  count(State, sort = TRUE) #7 states/territories in dataset, three entries with no state/territory (need to remove), and one Qld (instead of QLD - will amend) 
+
+asid$State[asid$State == "Qld"] <- "QLD" #changes Qld into QLD
+
+asid<-asid%>%
+  filter(!is.na(State) & State != "" & State != " ") #filters State column for any NA value, "" , or " " and removes
+
+asid%>% 
+  count(State, sort = TRUE) #State data is now all clean, with 7 states/territories with incidences in the database 
+```
+
+```{r}
+asid%>% 
+  count(Victim.injury, sort = TRUE) #'injured', 'fatal', and 'uninjured' the key categories, three for "blank" and two 'unknown' (will remove), one is 'injured' and one 'injury' (will include into 'injured')
+
+asid$Victim.injury[asid$Victim.injury == "Injured"] <- "injured"
+asid$Victim.injury[asid$Victim.injury == "injury"] <- "injured"
+
+asid<-asid%>%
+  filter(!is.na(Victim.injury) & Victim.injury != "" & Victim.injury != " " & Victim.injury != "unknown") #remove blank values and unknowns 
+
+asid%>%
+  count(Victim.injury,sort = TRUE) #now three categories - injured, fatal, or uninjured 
+```
+
+```{r}
+summary(asid$Incident.year) #dataset starts in 1791 and latest data value entry was in 2026 
+
+sum(is.na(asid$Incident.year)) #no incidences are missing year - great!! 
+
+```
+
+### Summary Tables - Total Incidents By State
+
+```{r}
+state_summary_table <- asid %>%
+  count(State, Incident.year, name = "yearly_count") %>% #count incidences per state per year
+  group_by(State) %>%
+  summarise(
+    Total_Incidents = sum(yearly_count), #group by state to find min, max etc. 
+    Peak_Year       = Incident.year[which.max(yearly_count)],
+    Max_Incidents   = max(yearly_count),
+    .groups = "drop"
+  )
+
+print(state_summary_table)
+
+#NSW peaked 2015 with 21 total incidences 
+#QLD peaked 1929 with 13 total incidences 
+#WA peaked 2023 with 15 total incidences
+```
+
+### Initial Plots 
+
+```{r}
+ggplot(asid, aes(x = Incident.year)) +
+  geom_bar(fill = "steelblue", color = "steelblue") + 
+  facet_wrap(~ State, ncol = 3) + 
+  theme_minimal() +
+  labs(
+    title = "Incident Counts Over Time by State",
+    x = "Year",
+    y = "Number of Incidents"
+  )
+
+#can see that most incidents have occured in NSW, QLD, and WA 
+#QLD had peak between 1925-1930 
+#NSW peak recently ~2015
+#WA also peaked recently 2023
+```
+
+```{r}
+ggplot(asid, aes(x = Incident.year)) +
+  geom_histogram(binwidth = 10, fill = "steelblue", color = "white") + 
+  facet_wrap(~ State, ncol = 3) + 
+  theme_minimal() +
+  labs(
+    title = "Incident Trends Over Time by State (10-Year Bins)",
+    x = "Year",
+    y = "Number of Incidents"
+  )
+
+#grouped into ten-year bins so can more clearly visualise overall trends 
+```
+
+### Filter by Injury Type 
+
+```{r}
+state_injury<- asid %>%
+  group_by(State, Victim.injury) %>%
+  summarise(Total_Incidents = n(), .groups = "drop") %>%
+  arrange(State, desc(Total_Incidents))
+
+print(state_injury)
+```
+
+### Plot by State, with Separate Lines for Each Injury Type 
+
+```{r}
+
+asid %>%
+  count(State, Incident.year, Victim.injury, name = "Incident_Count") %>%  #group and count incidents by state, year, and injury type
+  ggplot(aes(x = Incident.year, y = Incident_Count, color = Victim.injury)) + 
+  geom_line(linewidth = 0.8, alpha = 0.8) +
+  facet_wrap(~ State, scales = "free_y", ncol = 3) +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1") + #high-contrast color palette
+  labs(
+    title = "Incident Injury Trends Over Time by State",
+    x = "Year of Incident",
+    y = "Number of Incidents",
+    color = "Injury Type"
+  ) +
+  theme(
+    legend.position = "bottom",
+    strip.text = element_text(face = "bold", size = 11)
+  )
+
+## THIS IS SOOOOO HARD TO READ!! LOTS OF SPIKEY LINES AND OVERLAPS WHICH MAKES IT VERY DIFFICULT TO OBSERVE THE OVERALL TRENDS 
+```
+
+```{r warning=FALSE}
+#Trialing smoothed lines 
+
+asid %>%
+  count(State, Incident.year, Victim.injury, name = "Incident_Count") %>%
+  ggplot(aes(x = Incident.year, y = Incident_Count, color = Victim.injury)) +
+  geom_smooth(se = FALSE, method = "loess", span = 0.5, linewidth = 1) +
+  coord_cartesian(ylim = c(0, NA)) + #to ensure that smoothed lines do not go further down than zero
+  facet_wrap(~ State, scales = "free_y", ncol = 3) +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    title = "Smoothed Incident Injury Trends by State (1791 - 2026)",
+    subtitle = "Lines show the overall trend, filtering out year-to-year volatility",
+    x = "Year",
+    y = "Trend Value (Smoothed Counts)",
+    color = "Injury Type"
+  ) +
+  theme(legend.position = "bottom")
+
+#Definitely better, more readable however some of the trend lines dip below zero which is stupid 
+```
+
+```{r}
+#ten-year bins approach 
+
+ggplot(asid, aes(x = Incident.year, fill = Victim.injury)) +
+  geom_histogram(binwidth = 10, color = "white", position = "stack") +
+  facet_wrap(~ State, scales = "free_y", ncol = 3) +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1") +
+  labs(
+    title = "Total Incidents by State and Injury Type",
+    subtitle = "Data grouped into 10-year time blocks",
+    x = "Year",
+    y = "Total Incidents in Block",
+    fill = "Injury Type"
+  ) +
+  theme(legend.position = "bottom")
+
+#getting better again, can see the overall trends in total incidences whilst also the changes injury types but still not quite right 
+```
+
+```{r}
+# NSW only for all years (1791 - 2026)
+
+nsw_data <- asid %>% 
+  filter(State == "NSW") #dataframe with NSW incidences only 
+
+ggplot(nsw_data, aes(x = Incident.year, fill = Victim.injury)) + #bars of count per incident year, filled by injury type count 
+  geom_histogram(
+    binwidth = 5, 
+    color = "white",      
+    linewidth = 0.2,       
+    position = "stack"  #stacked by injury type count   
+  ) +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1") +
+  labs(
+    title = "NSW Shark Incidences by Injury Type (1791 - 2026)",
+    subtitle = "Data grouped into 5-year intervals",
+    x = "Year",
+    y = "Total Incidents per 5-Year Period",
+    fill = "Injury Type"
+  ) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14)
+  )
+```
+
+```{r}
+# QLD only for all years (1791 - 2026)
+
+qld_data <- asid %>% 
+  filter(State == "QLD") #dataframe with NSW incidences only 
+
+ggplot(qld_data, aes(x = Incident.year, fill = Victim.injury)) + #bars of count per incident year, filled by injury type count 
+  geom_histogram(
+    binwidth = 5, 
+    color = "white",      
+    linewidth = 0.2,       
+    position = "stack"  #stacked by injury type count   
+  ) +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1") +
+  labs(
+    title = "QLD Shark Incidences by Injury Type (1791 - 2026)",
+    subtitle = "Data grouped into 5-year intervals",
+    x = "Year",
+    y = "Total Incidents per 5-Year Period",
+    fill = "Injury Type"
+  ) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14)
+  )
+```
+
+```{r}
+#WA only for all years (1791 - 2026)
+
+wa_data <- asid %>% 
+  filter(State == "WA") #dataframe with NSW incidences only 
+
+ggplot(wa_data, aes(x = Incident.year, fill = Victim.injury)) + #bars of count per incident year, filled by injury type count 
+  geom_histogram(
+    binwidth = 5, 
+    color = "white",      
+    linewidth = 0.2,       
+    position = "stack"  #stacked by injury type count   
+  ) +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1") +
+  labs(
+    title = "WA Shark Incidences by Injury Type (1791 - 2026)",
+    subtitle = "Data grouped into 5-year intervals",
+    x = "Year",
+    y = "Total Incidents per 5-Year Period",
+    fill = "Injury Type"
+  ) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14)
+  )
+
+```
+
+
+### Refining Plots 
+
+```{r}
+#NSW - after 1850 and highlighted when active shark management started 
+
+nsw_filtered <- asid %>%
+  filter(
+    State == "NSW",
+    Incident.year >= 1850
+  ) %>%
+  count(Incident.year, name = "Total_Incidents") %>%
+  mutate(Era = if_else(Incident.year > 1937, "After 1937", "1850 - 1937"))
+
+
+ggplot(nsw_filtered, aes(x = Incident.year, y = Total_Incidents, fill = Era)) +
+  geom_col(width = 0.8) +
+  scale_fill_manual(values = c("1851 - 1937" = "#A0A0A0", "After 1937" = "#2B6CB0")) +
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(1850, 2026, by = 20)) +
+  labs(
+    title = "NSW Yearly Incident Counts (1851 - 2026)",
+    subtitle = "Highlighting the presence of active shark management plans",
+    x = "Year",
+    y = "Number of Incidents",
+    fill = "Time Period"
+  ) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14)
+  )
+```
+
+```{r}
+#QLD - filtered to incidences after 1850, and 1962 onwards highlighted as years with active management 
+
+qld_filtered <- asid %>%
+  filter(
+    State == "QLD",
+    Incident.year >= 1850
+  ) %>%
+  count(Incident.year, name = "Total_Incidents") %>%
+  mutate(Era = if_else(Incident.year > 1962, "After 1962", "1850 - 1962"))
+
+
+ggplot(qld_filtered, aes(x = Incident.year, y = Total_Incidents, fill = Era)) +
+  geom_col(width = 0.8) +
+  scale_fill_manual(values = c("1850 - 1962" = "#A0A0A0", "After 1962" = "#2B6CB0")) +
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(1850, 2026, by = 20)) +
+  labs(
+    title = "QLD Yearly Incident Counts (1850 - 2026)",
+    subtitle = "Highlighting the presence of active shark management plans",
+    x = "Year",
+    y = "Number of Incidents",
+    fill = "Time Period"
+  ) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14)
+  )
+```
+
+```{r}
+#WA - filtered to incidences after 1850, and 2012 onwards highlighted as years with active management 
+
+qld_filtered <- asid %>%
+  filter(
+    State == "WA",
+    Incident.year >= 1850
+  ) %>%
+  count(Incident.year, name = "Total_Incidents") %>%
+  mutate(Era = if_else(Incident.year > 2012, "After 2012", "1850 - 2012"))
+
+
+ggplot(qld_filtered, aes(x = Incident.year, y = Total_Incidents, fill = Era)) +
+  geom_col(width = 0.8) +
+  scale_fill_manual(values = c("1850 - 2012" = "#A0A0A0", "After 2012" = "#2B6CB0")) +
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(1850, 2026, by = 20)) +
+  labs(
+    title = "WA Yearly Incident Counts (1850 - 2026)",
+    subtitle = "Highlighting the presence of active shark management plans",
+    x = "Year",
+    y = "Number of Incidents",
+    fill = "Time Period"
+  ) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14)
+  )
+```
+
+### TO DO 
+
+Filted ASID state-specific dataframes to 1900 onwards 
+
+Omit attacks from 2026 as the year is not over and we do not have specific population statistics 
+
+Find census data from 1900 - present for each state from Australian Bureau of Statistics and read into R as a csv 
+
+### Population Data 
+
+1901 - 2011: ASB 3105.0.65.001 Australian Historical Population Statistics, 2014 Table 1.2 Population by sex, states, and territories, 1901 onwards
+2012 - 2019: ASB 3101.0 National State and Territory Population, Table 4: Estimated Resident Population, States and Territories 
+2020 - 2025: ABS 3101.001.202512 National, State, and Territory Population, Dec 2025  Table 5: Population by sex-States and Territories
+
+```{r}
+#Clean the 1901-2011 file, horizontal orientation (State on y, Year on x)
+pop_1901_2011<- read_csv("Data/1901_2011.csv")
+
+clean_1901_2011 <- pop_1901_2011 %>% 
+  rename(State = Year) %>% #need to rename the Year column to State (incorrect heading from original .csv file)
+    pivot_longer(   #pivot all the numeric year columns down, leaving State alone
+    cols = -State,               
+    names_to = "Year", 
+    values_to = "Population"
+  ) %>%
+  mutate(Year = as.numeric(Year))
+
+pop_2012_2019 <- read_csv("Data/2012_2019.csv")
+pop_2020_2025 <- read_csv("Data/2020_2025.csv")
+
+clean_2012_2019 <- pop_2012_2019 %>%
+  pivot_longer(
+    cols = -Year,                
+    names_to = "State", 
+    values_to = "Population"
+  ) %>%
+  mutate(Year = as.numeric(Year))
+
+clean_2020_2025 <- pop_2020_2025 %>%
+  pivot_longer(
+    cols = -Year,                
+    names_to = "State", 
+    values_to = "Population"
+  ) %>%
+  mutate(Year = as.numeric(Year))
+
+final_population_df <- bind_rows( #join together the rows in the separate files into one data frame with all population data 1901-2025
+    clean_1901_2011, 
+    clean_2012_2019, 
+    clean_2020_2025
+  ) %>%
+  mutate(State = toupper(State)) %>% #ensure column headers match the ASID headers to avoid confusion 
+  arrange(State, Year)
+
+summary(final_population_df)
+```
+
+### INCIDENTS PER CAPITA 
+
+```{r}
+#Convert shark attack incidents per year into shark incidents per year per capita to account for changes in population 
+
+# =======================================================
+# 1. Summarize incident data by State, Year, and Injury
+# =======================================================
+incidents_yearly <- asid %>%
+  filter(
+    Incident.year >= 1900,
+    State %in% c("NSW", "QLD", "WA")
+  ) %>%
+  count(State, Incident.year, Victim.injury, name = "Count")
+
+# =======================================================
+# 2. Merge with your new master population dataframe
+# =======================================================
+analysis_df <- incidents_yearly %>%
+  # Merging using the exact column names we structured earlier
+  left_join(final_population_df, by = c("Incident.year" = "Year", "State" = "State")) %>%
+  
+  # Calculate the population-adjusted rate per 1 million people
+  mutate(Rate_Per_Million = (Count / Population) * 1000000)
+
+# =======================================================
+# 3. Add the Active Management Flags (WA updated to 2012)
+# =======================================================
+analysis_df <- analysis_df %>%
+  mutate(Management = case_when(
+    State == "NSW" & Incident.year >= 1937 ~ "Active Management (Nets)",
+    State == "QLD" & Incident.year >= 1962 ~ "Active Management (Nets/Drumlines)",
+    State == "WA"  & Incident.year >= 2012 ~ "Modern Mitigation Era",
+    TRUE ~ "No Active Program"
+  ))
+
+# =======================================================
+# 4. Generate the Comparative Visualization
+# =======================================================
+# Define the intervention milestone vertical lines (WA matching at 2012)
+milestones <- data.frame(
+  State = c("NSW", "QLD", "WA"),
+  Policy_Year = c(1937, 1962, 2012),
+  Label = c("Nets Introduced", "Nets/Drumlines", "Mitigation Era")
+)
+
+ggplot(analysis_df, aes(x = Incident.year, y = Rate_Per_Million, color = Victim.injury)) +
+  
+  # Non-negative smoothing model to beautifully trend the per-capita rate
+  geom_smooth(
+    method = "glm", 
+    method.args = list(family = "quasipoisson"), 
+    formula = y ~ ns(x, df = 4), 
+    se = FALSE, 
+    linewidth = 1
+  ) +
+  
+  # Add the vertical milestone lines
+  geom_vline(
+    data = milestones, 
+    aes(xintercept = Policy_Year), 
+    linetype = "dashed", 
+    color = "black", 
+    alpha = 0.6
+  ) +
+  
+  # Label the lines clearly on the plots
+  geom_text(
+    data = milestones, 
+    aes(x = Policy_Year + 2, y = Inf, label = Label), 
+    color = "black", 
+    angle = 90, 
+    vjust = 1.5, 
+    hjust = 1.1, 
+    inherit.aes = FALSE, 
+    size = 3
+  ) +
+  
+  # Separate charts for each state to track regional differences
+  facet_wrap(~ State, scales = "free_y", ncol = 3) +
+  
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    title = "Population-Adjusted Shark Incident Rates over Time (1900 - 2026)",
+    subtitle = "Rates reflect incidents per 1,000,000 people. Dashed lines indicate active management rollouts.",
+    x = "Year",
+    y = "Incident Rate (per 1 Million People)",
+    color = "Injury Type"
+  ) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14),
+    strip.text = element_text(face = "bold", size = 11)
+  )
+```
+
+```{r}
+#per capita graph w/ raw data 
+library(dplyr)
+library(ggplot2)
+
+# =======================================================
+# 1. Filter and summarize incident data
+# =======================================================
+incidents_yearly <- asid %>%
+  filter(
+    Incident.year >= 1900,
+    State %in% c("NSW", "QLD", "WA")
+  ) %>%
+  count(State, Incident.year, Victim.injury, name = "Count")
+
+# =======================================================
+# 2. Merge with population dataframe & calculate rates
+# =======================================================
+analysis_df <- incidents_yearly %>%
+  left_join(final_population_df, by = c("Incident.year" = "Year", "State" = "State")) %>%
+  mutate(Rate_Per_Million = (Count / Population) * 1000000)
+
+# =======================================================
+# 3. Generate the Non-Smoothed (Raw Line) Visualization
+# =======================================================
+milestones <- data.frame(
+  State = c("NSW", "QLD", "WA"),
+  Policy_Year = c(1937, 1962, 2012),
+  Label = c("Nets Introduced", "Nets/Drumlines", "Mitigation Era")
+)
+
+ggplot(analysis_df, aes(x = Incident.year, y = Rate_Per_Million, color = Victim.injury)) +
+  
+  # Simply draw raw lines connecting the exact data points for each year
+  geom_line(linewidth = 0.8, alpha = 0.8) +
+  
+  # Add the vertical milestone lines
+  geom_vline(
+    data = milestones, 
+    aes(xintercept = Policy_Year), 
+    linetype = "dashed", 
+    color = "black", 
+    alpha = 0.6
+  ) +
+  
+  # Label the lines clearly on the plots
+  geom_text(
+    data = milestones, 
+    aes(x = Policy_Year + 2, y = Inf, label = Label), 
+    color = "black", 
+    angle = 90, 
+    vjust = 1.5, 
+    hjust = 1.1, 
+    inherit.aes = FALSE, 
+    size = 3
+  ) +
+  
+  # Generates exactly 3 charts side-by-side
+  facet_wrap(~ State, scales = "free_y", ncol = 3) +
+  
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    title = "RAW Population-Adjusted Shark Incident Rates (1900 - 2026)",
+    subtitle = "Spikes represent high per-capita volatility in individual years",
+    x = "Year",
+    y = "Incident Rate (per 1 Million People)",
+    color = "Injury Type"
+  ) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14),
+    strip.text = element_text(face = "bold", size = 11)
+  )
+```
+
+```{r}
+#code with trendlines 
+
+# =======================================================
+# 1. Filter and summarize incident data
+# =======================================================
+incidents_yearly <- asid %>%
+  filter(
+    Incident.year >= 1900,
+    State %in% c("NSW", "QLD", "WA")
+  ) %>%
+  count(State, Incident.year, Victim.injury, name = "Count")
+
+# =======================================================
+# 2. Merge with population dataframe & calculate rates
+# =======================================================
+analysis_df <- incidents_yearly %>%
+  left_join(final_population_df, by = c("Incident.year" = "Year", "State" = "State")) %>%
+  mutate(Rate_Per_Million = (Count / Population) * 1000000)
+
+# =======================================================
+# 3. Generate the Overlay Visualization
+# =======================================================
+milestones <- data.frame(
+  State = c("NSW", "QLD", "WA"),
+  Policy_Year = c(1937, 1962, 2012),
+  Label = c("Nets Introduced", "Nets/Drumlines", "Mitigation Era")
+)
+
+ggplot(analysis_df, aes(x = Incident.year, y = Rate_Per_Million, color = Victim.injury)) +
+  
+  # LAYER 1: Raw yearly spikes (made semi-transparent with alpha = 0.4)
+  geom_line(linewidth = 0.5, alpha = 0.4) +
+  
+  # LAYER 2: Strong, zero-constrained mathematical trendlines over the top
+  geom_smooth(
+    method = "glm", 
+    method.args = list(family = "quasipoisson"), 
+    formula = y ~ ns(x, df = 4), 
+    se = FALSE, 
+    linewidth = 1.3
+  ) +
+  
+  # Add the vertical milestone lines
+  geom_vline(
+    data = milestones, 
+    aes(xintercept = Policy_Year), 
+    linetype = "dashed", 
+    color = "black", 
+    alpha = 0.6
+  ) +
+  
+  # Label the lines clearly on the plots
+  geom_text(
+    data = milestones, 
+    aes(x = Policy_Year + 2, y = Inf, label = Label), 
+    color = "black", 
+    angle = 90, 
+    vjust = 1.5, 
+    hjust = 1.1, 
+    inherit.aes = FALSE, 
+    size = 3
+  ) +
+  
+  # Generates exactly 3 charts side-by-side
+  facet_wrap(~ State, ncol = 3) +
+  
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    title = "Population-Adjusted Shark Incident Rates with Long-Term Trends",
+    subtitle = "Faded lines show raw annual rates; bold curves highlight non-negative smoothed trends.",
+    x = "Year",
+    y = "Incident Rate (per 1 Million People)",
+    color = "Injury Type"
+  ) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14),
+    strip.text = element_text(face = "bold", size = 11)
+  )
+```
+
+## THOUGHTS 
+
+looks pretty good, but would it be better to have the plots independent so the y-axis are specific (could have them specific in faceted but then can mislead by making smaller trends e.g., NSW look big when its actually the smallest)
+
+for the presentation - have them separated and some information below each plot with key info, max, min, management plan inception etc. general trend etc. 
