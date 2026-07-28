@@ -1,4 +1,4 @@
-# Final-Project
+# Final Project
 Repository for the data and code for my final project for MB5370. 
 
 Using datafrom the Australian Shark Incident Database (ASID) (Taronga Conservation Society Australia, Accessed July 16th) and historical population statistics in NSW, QLD, and WA , I analysed temporal trends in shark incidents, adjusting for human population changes over time. 
